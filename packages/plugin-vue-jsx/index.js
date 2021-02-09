@@ -4,13 +4,25 @@ const jsx = require('@vue/babel-plugin-jsx')
 const importMeta = require('@babel/plugin-syntax-import-meta')
 const hash = require('hash-sum')
 
+const defaultExtensions = ['.jsx', '.tsx']
+
+const regExpCharactersRegExp = /[\\^$.*+?()[\]{}|]/g
+const escapeRegExpCharacters = (str) =>
+  str.replace(regExpCharactersRegExp, '\\$&')
+
 /**
- * @param {import('@vue/babel-plugin-jsx').VueJSXPluginOptions} options
+ * @param {import('@vue/babel-plugin-jsx').VueJSXPluginOptions & {extensions?: string[]}} options
  * @returns {import('vite').Plugin}
  */
 function vueJsxPlugin(options = {}) {
   let needHmr = false
   let needSourceMap = true
+
+  const { extensions = defaultExtensions, ...babelPluginOptions } = options
+
+  const extensionReg = new RegExp(
+    `(${extensions.map(escapeRegExpCharacters).join('|')})$`
+  )
 
   return {
     name: 'vue-jsx',
@@ -36,8 +48,8 @@ function vueJsxPlugin(options = {}) {
     },
 
     transform(code, id, ssr) {
-      if (/\.[jt]sx$/.test(id)) {
-        const plugins = [importMeta, [jsx, options]]
+      if (extensionReg.test(id)) {
+        const plugins = [importMeta, [jsx, babelPluginOptions]]
         if (id.endsWith('.tsx')) {
           plugins.push([
             require('@babel/plugin-transform-typescript'),
