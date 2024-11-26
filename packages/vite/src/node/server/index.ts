@@ -259,20 +259,38 @@ export interface ViteDevServer {
   _pendingReload: Promise<void> | null
 }
 
+/**
+ * 创建 Vite 开发服务器
+ *
+ * 此函数初始化并返回一个 Vite 开发服务器实例它负责处理配置、
+ * 创建必要的中间件、设置文件监视器、加载插件、构建模块图、
+ * 以及配置服务器的各种钩子和事件处理程序
+ *
+ * @param inlineConfig - 用户提供的配置对象，用于定制服务器行为
+ * @returns 返回一个 Promise，解析为 ViteDevServer 实例
+ */
 export async function createServer(
   inlineConfig: InlineConfig = {}
 ): Promise<ViteDevServer> {
+  // 解析配置，并设置为开发模式
   const config = await resolveConfig(inlineConfig, 'serve', 'development')
+  // 获取项目根目录路径
   const root = config.root
+  // 获取服务器配置，如果未提供则默认为空对象
   const serverConfig = config.server || {}
+  // 判断是否为中间件模式
   const middlewareMode = !!serverConfig.middlewareMode
 
+  // 创建 Connect 中间件实例
   const middlewares = connect() as Connect.Server
+  // 根据配置解析 HTTP 服务器实例，中间件模式下不创建 HTTP 服务器
   const httpServer = middlewareMode
     ? null
     : await resolveHttpServer(serverConfig, middlewares)
+  // 创建 WebSocket 服务器，用于热更新和开发时的实时通信
   const ws = createWebSocketServer(httpServer, config)
 
+  // 解析并应用文件监视器配置
   const { ignored = [], ...watchOptions } = serverConfig.watch || {}
   const watcher = chokidar.watch(path.resolve(root), {
     ignored: ['**/node_modules/**', '**/.git/**', ...ignored],
@@ -281,15 +299,21 @@ export async function createServer(
     ...watchOptions
   }) as FSWatcher
 
+  // 加载插件
   const plugins = config.plugins
+  // 创建插件容器
   const container = await createPluginContainer(config, watcher)
+  // 创建模块图实例，用于跟踪模块依赖关系
   const moduleGraph = new ModuleGraph(container)
+  // 创建关闭 HTTP 服务器的函数
   const closeHttpServer = createSeverCloseFn(httpServer)
 
+  // 初始化 ViteDevServer 对象
   const server: ViteDevServer = {
     config: config,
     middlewares,
     get app() {
+      // 弃用警告，引导使用 middlewares
       config.logger.warn(
         `ViteDevServer.app is deprecated. Use ViteDevServer.middlewares instead.`
       )
@@ -302,10 +326,12 @@ export async function createServer(
     moduleGraph,
     transformWithEsbuild,
     transformRequest(url, options) {
+      // 请求转换中间件
       return transformRequest(url, server, options)
     },
     transformIndexHtml: null as any,
     ssrLoadModule(url, options) {
+      // SSR 模块加载
       if (!server._ssrExternals) {
         server._ssrExternals = resolveSSRExternal(
           config,
@@ -317,14 +343,17 @@ export async function createServer(
       return ssrLoadModule(url, server, !!options?.isolated)
     },
     ssrFixStacktrace(e) {
+      // 修复 SSR 栈跟踪
       if (e.stack) {
         e.stack = ssrRewriteStacktrace(e.stack, moduleGraph)
       }
     },
     listen(port?: number) {
+      // 启动服务器监听指定端口
       return startServer(server, port)
     },
     async close() {
+      // 关闭服务器和所有相关资源
       await Promise.all([
         watcher.close(),
         ws.close(),
@@ -334,14 +363,16 @@ export async function createServer(
     },
     _optimizeDepsMetadata: null,
     _ssrExternals: null,
-    _globImporters: {},
+    _globImporters: {} as Record<string, string[]>,
     _isRunningOptimizer: false,
-    _registerMissingImport: null,
-    _pendingReload: null
+    _registerMissingImport: null as MissingImportRegisterFn | null,
+    _pendingReload: null as Promise<void> | null
   }
 
+  // 设置 HTML 转换函数
   server.transformIndexHtml = createDevHtmlTransformFn(server)
 
+  // 定义进程退出时的处理函数
   const exitProcess = async () => {
     try {
       await server.close()
@@ -350,20 +381,25 @@ export async function createServer(
     }
   }
 
+  // 监听进程退出信号
   process.once('SIGTERM', exitProcess)
 
+  // 如果标准输入不是 TTY 模式，监听输入结束事件
   if (!process.stdin.isTTY) {
     process.stdin.on('end', exitProcess)
   }
 
+  // 监听文件系统事件，处理文件变化
   watcher.on('change', async (file) => {
     file = normalizePath(file)
-    // invalidate module graph cache on file change
+    // 文件变化时，使模块图缓存失效
     moduleGraph.onFileChange(file)
     if (serverConfig.hmr !== false) {
       try {
+        // 尝试处理 HMR 更新
         await handleHMRUpdate(file, server)
       } catch (err) {
+        // 发送错误信息到客户端
         ws.send({
           type: 'error',
           err: prepareError(err)
@@ -372,15 +408,17 @@ export async function createServer(
     }
   })
 
+  // 监听新文件添加事件
   watcher.on('add', (file) => {
     handleFileAddUnlink(normalizePath(file), server)
   })
 
+  // 监听文件删除事件
   watcher.on('unlink', (file) => {
     handleFileAddUnlink(normalizePath(file), server, true)
   })
 
-  // apply server configuration hooks from plugins
+  // 应用插件的服务器配置钩子
   const postHooks: ((() => void) | void)[] = []
   for (const plugin of plugins) {
     if (plugin.configureServer) {
@@ -388,54 +426,51 @@ export async function createServer(
     }
   }
 
-  // Internal middlewares ------------------------------------------------------
+  // 内部中间件配置 ------------------------------------------------------
 
-  // request timer
+  // 请求计时中间件
   if (process.env.DEBUG) {
     middlewares.use(timeMiddleware(root))
   }
 
-  // cors (enabled by default)
+  // CORS 配置中间件
   const { cors } = serverConfig
   if (cors !== false) {
     middlewares.use(corsMiddleware(typeof cors === 'boolean' ? {} : cors))
   }
 
-  // proxy
+  // 代理配置中间件
   const { proxy } = serverConfig
   if (proxy) {
     middlewares.use(proxyMiddleware(server))
   }
 
-  // base
+  // 基础路径配置中间件
   if (config.base !== '/') {
     middlewares.use(baseMiddleware(server))
   }
 
-  // open in editor support
+  // 编辑器支持中间件
   middlewares.use('/__open-in-editor', launchEditorMiddleware())
 
-  // hmr reconnect ping
+  // HMR 重连心跳中间件
   middlewares.use('/__vite_ping', (_, res) => res.end('pong'))
 
-  // serve static files under /public
-  // this applies before the transform middleware so that these files are served
-  // as-is without transforms.
+  // 静态文件服务中间件
   middlewares.use(servePublicMiddleware(config.publicDir))
 
-  // main transform middleware
+  // 主转换中间件
   middlewares.use(transformMiddleware(server))
 
-  // serve static files
+  // 静态文件服务中间件
   middlewares.use(serveRawFsMiddleware())
   middlewares.use(serveStaticMiddleware(root, config))
 
-  // spa fallback
+  // SPA 回退中间件
   if (!middlewareMode) {
     middlewares.use(
       history({
         logger: createDebugger('vite:spa-fallback'),
-        // support /dir/ without explicit index.html
         rewrites: [
           {
             from: /\/$/,
@@ -453,24 +488,23 @@ export async function createServer(
     )
   }
 
-  // run post config hooks
-  // This is applied before the html middleware so that user middleware can
-  // serve custom content instead of index.html.
+  // 运行后配置钩子
   postHooks.forEach((fn) => fn && fn())
 
   if (!middlewareMode) {
-    // transform index.html
+    // 转换 index.html
     middlewares.use(indexHtmlMiddleware(server))
-    // handle 404s
+    // 处理 404 错误
     middlewares.use((_, res) => {
       res.statusCode = 404
       res.end()
     })
   }
 
-  // error handler
+  // 错误处理中间件
   middlewares.use(errorMiddleware(server, middlewareMode))
 
+  // 运行优化器
   const runOptimize = async () => {
     if (config.optimizeCacheDir) {
       server._isRunningOptimizer = true
@@ -484,7 +518,7 @@ export async function createServer(
   }
 
   if (!middlewareMode && httpServer) {
-    // overwrite listen to run optimizer before server start
+    // 在服务器启动前运行优化器
     const listen = httpServer.listen.bind(httpServer)
     httpServer.listen = (async (port: number, ...args: any[]) => {
       try {
@@ -498,25 +532,39 @@ export async function createServer(
     }) as any
 
     httpServer.once('listening', () => {
-      // update actual port since this may be different from initial value
+      // 更新实际端口值
       serverConfig.port = (httpServer.address() as AddressInfo).port
     })
   } else {
     await runOptimize()
   }
 
+  // 返回 ViteDevServer 实例
   return server
 }
 
+/**
+ * 异步启动服务器。
+ *
+ * @param server Vite 开发服务器实例。
+ * @param inlinePort 要使用的端口号，可选。
+ * @returns 返回一个 Promise，解析为 Vite 开发服务器实例。
+ *
+ * 此函数尝试在指定的端口或服务器配置中的默认端口上启动服务器。
+ * 如果端口已被占用，除非配置了 strictPort，否则将尝试使用下一个可用端口。
+ * 它还处理记录服务器启动信息，并在配置允许的情况下自动打开浏览器。
+ */
 async function startServer(
   server: ViteDevServer,
   inlinePort?: number
 ): Promise<ViteDevServer> {
+  // 检查 httpServer 是否存在，如果不存在，则抛出错误，因为无法在中间件模式下调用 server.listen。
   const httpServer = server.httpServer
   if (!httpServer) {
-    throw new Error('Cannot call server.listen in middleware mode.')
+    throw new Error('无法在中间件模式下调用 server.listen。')
   }
 
+  // 初始化服务器选项、端口、主机名、协议、日志记录器和基础 URL。
   const options = server.config.server || {}
   let port = inlinePort || options.port || 3000
   let hostname = options.host || 'localhost'
@@ -524,14 +572,16 @@ async function startServer(
   const info = server.config.logger.info
   const base = server.config.base
 
+  // 返回一个 Promise，尝试启动服务器。
   return new Promise((resolve, reject) => {
+    // 定义错误处理函数。
     const onError = (e: Error & { code?: string }) => {
       if (e.code === 'EADDRINUSE') {
         if (options.strictPort) {
           httpServer.removeListener('error', onError)
-          reject(new Error(`Port ${port} is already in use`))
+          reject(new Error(`端口 ${port} 已被占用`))
         } else {
-          info(`Port ${port} is in use, trying another one...`)
+          info(`端口 ${port} 已被占用，尝试使用另一个端口...`)
           httpServer.listen(++port)
         }
       } else {
@@ -540,12 +590,15 @@ async function startServer(
       }
     }
 
+    // 监听错误事件。
     httpServer.on('error', onError)
 
+    // 监听端口。
     httpServer.listen(port, () => {
       httpServer.removeListener('error', onError)
 
-      info(`\n ⚡ Vite dev server running at:\n`, {
+      // 记录服务器启动信息。
+      info(`\n ⚡ Vite 开发服务器正在运行于:\n`, {
         clear: !server.config.logger.hasWarned
       })
       const interfaces = os.networkInterfaces()
@@ -555,8 +608,8 @@ async function startServer(
           .map((detail) => {
             return {
               type: detail.address.includes('127.0.0.1')
-                ? 'Local:   '
-                : 'Network: ',
+                ? '本地:   '
+                : '网络: ',
               host: detail.address.replace('127.0.0.1', hostname)
             }
           })
@@ -566,17 +619,16 @@ async function startServer(
           })
       )
 
-      // @ts-ignore
+      // 记录启动时间。
       if (global.__vite_start_time) {
         info(
           chalk.cyan(
-            // @ts-ignore
-            `\n  ready in ${Date.now() - global.__vite_start_time}ms.\n`
+            `\n  启动完成，耗时 ${Date.now() - global.__vite_start_time}ms.\n`
           )
         )
       }
 
-      // @ts-ignore
+      // 记录 CPU 性能分析结果。
       const profileSession = global.__vite_profile_session
       if (profileSession) {
         profileSession.post('Profiler.stop', (err: any, { profile }: any) => {
@@ -586,7 +638,7 @@ async function startServer(
             fs.writeFileSync(outPath, JSON.stringify(profile))
             info(
               chalk.yellow(
-                `  CPU profile written to ${chalk.white.dim(outPath)}\n`
+                `  CPU 性能分析结果已保存至 ${chalk.white.dim(outPath)}\n`
               )
             )
           } else {
@@ -595,6 +647,7 @@ async function startServer(
         })
       }
 
+      // 自动打开浏览器。
       if (options.open) {
         const path = typeof options.open === 'string' ? options.open : base
         openBrowser(
@@ -604,6 +657,7 @@ async function startServer(
         )
       }
 
+      // 解析 Promise。
       resolve(server)
     })
   })
