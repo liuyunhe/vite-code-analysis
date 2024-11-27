@@ -160,18 +160,58 @@ export async function createPluginContainer(
   // we should create a new context for each async hook pipeline so that the
   // active plugin in that pipeline can be tracked in a concurrency-safe manner.
   // using a class to make creating new contexts more efficient
+
+  // 我们应该为每个异步钩子管道创建一个新的上下文，以便在该管道中跟踪
+  // 当前活跃的插件，且能以并发安全的方式进行。
+  // 使用类来提高创建新上下文的效率。
+  /**
+   * 插件上下文类，实现了 PluginContext 接口，提供了插件操作所需的各种功能和元数据。
+   */
   class Context implements PluginContext {
+    /**
+     * 最小化上下文的元数据。
+     */
     meta = minimalContext.meta
+
+    /**
+     * 是否为服务器端渲染模式。
+     */
     ssr = false
+
+    /**
+     * 当前激活的插件。
+     */
     _activePlugin: Plugin | null
+
+    /**
+     * 当前激活的模块ID。
+     */
     _activeId: string | null = null
+
+    /**
+     * 当前激活的模块代码。
+     */
     _activeCode: string | null = null
+
+    /**
+     * 需要跳过的插件集合。
+     */
     _resolveSkips?: Set<Plugin>
 
+    /**
+     * 构造函数，初始化当前激活的插件。
+     * @param initialPlugin - 初始激活的插件。
+     */
     constructor(initialPlugin?: Plugin) {
       this._activePlugin = initialPlugin || null
     }
 
+    /**
+     * 解析代码。
+     * @param code - 要解析的代码字符串。
+     * @param opts - 解析选项。
+     * @returns 解析后的结果。
+     */
     parse(code: string, opts: any = {}) {
       return parser.parse(code, {
         sourceType: 'module',
@@ -181,6 +221,13 @@ export async function createPluginContainer(
       })
     }
 
+    /**
+     * 解析模块ID。
+     * @param id - 模块ID。
+     * @param importer - 导入者模块ID。
+     * @param options - 解析选项，包括是否跳过自身。
+     * @returns 解析后的模块信息或null。
+     */
     async resolve(
       id: string,
       importer?: string,
@@ -196,6 +243,11 @@ export async function createPluginContainer(
       return out as ResolvedId | null
     }
 
+    /**
+     * 获取模块信息。
+     * @param id - 模块ID。
+     * @returns 模块信息。
+     */
     getModuleInfo(id: string) {
       let mod = MODULES.get(id)
       if (mod) return mod.info
@@ -208,33 +260,62 @@ export async function createPluginContainer(
       return mod.info
     }
 
+    /**
+     * 获取所有模块ID。
+     * @returns 所有模块ID的迭代器。
+     */
     getModuleIds() {
       return MODULES.keys()
     }
 
+    /**
+     * 添加监视文件。
+     * @param id - 文件ID。
+     */
     addWatchFile(id: string) {
       watchFiles.add(id)
       if (watcher) ensureWatchedFile(watcher, id, root)
     }
 
+    /**
+     * 获取所有被监视的文件。
+     * @returns 被监视文件的数组。
+     */
     getWatchFiles() {
       return [...watchFiles]
     }
 
+    /**
+     * 发布文件。
+     * @param assetOrFile - 资源或文件。
+     * @returns 空字符串。
+     */
     emitFile(assetOrFile: EmittedFile) {
       warnIncompatibleMethod(`emitFile`, this._activePlugin!.name)
       return ''
     }
 
+    /**
+     * 设置资源源码。
+     */
     setAssetSource() {
       warnIncompatibleMethod(`setAssetSource`, this._activePlugin!.name)
     }
 
+    /**
+     * 获取文件名。
+     * @returns 空字符串。
+     */
     getFileName() {
       warnIncompatibleMethod(`getFileName`, this._activePlugin!.name)
       return ''
     }
 
+    /**
+     * 发出警告。
+     * @param e - 错误信息或对象。
+     * @param position - 错误位置。
+     */
     warn(
       e: string | RollupError,
       position?: number | { column: number; line: number }
@@ -251,12 +332,17 @@ export async function createPluginContainer(
       })
     }
 
+    /**
+     * 抛出错误。
+     * @param e - 错误信息或对象。
+     * @param position - 错误位置。
+     * @throws 抛出格式化的错误。
+     */
     error(
       e: string | RollupError,
       position?: number | { column: number; line: number }
     ): never {
-      // error thrown here is caught by the transform middleware and passed on
-      // the the error middleware.
+      // 抛出的错误在这里被捕获，并传递给错误中间件。
       throw formatError(e, position, this)
     }
   }
@@ -367,7 +453,9 @@ export async function createPluginContainer(
 
   let closed = false
 
+  // 定义一个插件容器，用于管理和执行各种构建插件
   const container: PluginContainer = {
+    // 初始化容器选项，通过调用每个插件的options方法来扩展默认选项
     options: await (async () => {
       let options = rollupOptions
       for (const plugin of plugins) {
@@ -391,6 +479,7 @@ export async function createPluginContainer(
       }
     })(),
 
+    // 在构建开始时调用每个插件的buildStart方法
     async buildStart() {
       await Promise.all(
         plugins.map((plugin) => {
@@ -404,21 +493,43 @@ export async function createPluginContainer(
       )
     },
 
+    // 解析模块ID，依次调用每个插件的resolveId方法，直到获得一个非空结果
+    /**
+     *
+     * 此函数根据当前上下文和配置的插件将原始标识符（rawId）解析为更具体或绝对的形式。
+     * 它是模块解析过程的核心部分，允许通过插件实现自定义解析逻辑。
+     *
+     * @param rawId 需要解析的原始标识符字符串。
+     * @param importer 导入文件的路径，默认为项目根目录下的 index.html。用于解析相对路径。
+     * @param skips 要跳过的插件集合，避免重复处理。
+     * @param ssr 标记是否处于服务器端渲染模式。
+     * @returns 如果解析成功，返回部分解析的标识符对象；否则返回 null。
+     */
     async resolveId(rawId, importer = join(root, 'index.html'), skips, ssr) {
+      // 初始化一个新的 Context 对象，用于保存解析过程中特定上下文的信息。
       const ctx = new Context()
+      // 在上下文中设置 SSR 模式标志。
       ctx.ssr = !!ssr
+      // 内部使用，用于跟踪解析过程中要跳过的插件。
       ctx._resolveSkips = skips
+      // 调试模式记录解析开始时间。
       const resolveStart = isDebug ? Date.now() : 0
 
+      // 初始化解析后的标识符为 null。
       let id: string | null = null
+      // 初始化一个对象，用于存储部分解析结果。
       const partial: Partial<PartialResolvedId> = {}
+      // 遍历所有插件，调用它们的 resolveId 方法（如果存在且不在跳过列表中）。
       for (const plugin of plugins) {
         if (!plugin.resolveId) continue
         if (skips?.has(plugin)) continue
 
+        // 在上下文中设置当前活动的插件。
         ctx._activePlugin = plugin
 
+        // 调试模式记录插件解析开始时间。
         const pluginResolveStart = isDebug ? Date.now() : 0
+        // 调用插件的 resolveId 方法。
         const result = await plugin.resolveId.call(
           ctx as any,
           rawId,
@@ -428,6 +539,7 @@ export async function createPluginContainer(
         )
         if (!result) continue
 
+        // 处理解析结果，结果可能是字符串或对象。
         if (typeof result === 'string') {
           id = result
         } else {
@@ -435,6 +547,7 @@ export async function createPluginContainer(
           Object.assign(partial, result)
         }
 
+        // 调试模式记录解析时间、插件名称和解析后的标识符。
         isDebug &&
           debugPluginResolve(
             timeFrom(pluginResolveStart),
@@ -442,13 +555,14 @@ export async function createPluginContainer(
             prettifyUrl(id, root)
           )
 
-        // resolveId() is hookFirst - first non-null result is returned.
+        // resolveId() 是 hookFirst - 返回第一个非空结果。
         break
       }
 
+      // 如果标识符已解析且不是外部 URL，在调试模式下记录解析结果。
       if (isDebug && rawId !== id && !rawId.startsWith('/@fs/')) {
         const key = rawId + id
-        // avoid spamming
+        // 避免重复记录
         if (!seenResolves[key]) {
           seenResolves[key] = true
           debugResolve(
@@ -457,6 +571,7 @@ export async function createPluginContainer(
         }
       }
 
+      // 如果解析成功，返回部分解析的标识符对象；否则返回 null。
       if (id) {
         partial.id = isExternalUrl(id) ? id : normalizePath(id)
         return partial as PartialResolvedId
@@ -465,6 +580,7 @@ export async function createPluginContainer(
       }
     },
 
+    // 加载模块代码，调用每个插件的load方法，直到获得一个非空结果
     async load(id, ssr) {
       const ctx = new Context()
       ctx.ssr = !!ssr
@@ -479,6 +595,7 @@ export async function createPluginContainer(
       return null
     },
 
+    // 转换模块代码，调用每个插件的transform方法，对代码进行一系列转换
     async transform(code, id, inMap, ssr) {
       const ctx = new TransformContext(id, code, inMap as SourceMap)
       ctx.ssr = !!ssr
@@ -514,6 +631,7 @@ export async function createPluginContainer(
       }
     },
 
+    // 当监视的文件发生变化时调用插件的watchChange方法
     watchChange(id, event = 'update') {
       const ctx = new Context()
       if (watchFiles.has(id)) {
@@ -525,6 +643,7 @@ export async function createPluginContainer(
       }
     },
 
+    // 关闭构建容器，调用每个插件的buildEnd和closeBundle方法进行清理
     async close() {
       if (closed) return
       const ctx = new Context()
