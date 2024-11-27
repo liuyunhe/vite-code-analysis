@@ -663,14 +663,25 @@ async function startServer(
   })
 }
 
+/**
+ * 创建一个用于关闭服务器的函数
+ * 此函数主要处理服务器的优雅关闭过程，确保所有已打开的连接都被正确关闭后，才关闭服务器
+ * 
+ * @param server 可能为null的http.Server实例，用于处理连接和关闭操作
+ * @returns 返回一个函数，该函数当被调用时，会关闭服务器并结束所有打开的连接
+ */
 function createSeverCloseFn(server: http.Server | null) {
+  // 如果server为null，则返回一个空的函数，因为没有服务器实例需要关闭
   if (!server) {
     return () => {}
   }
 
+  // 标记是否服务器已经开始监听连接
   let hasListened = false
+  // 存储所有当前打开的socket连接
   const openSockets = new Set<net.Socket>()
 
+  // 当有新的连接时，将该连接添加到openSockets集合中，并监听连接的关闭事件
   server.on('connection', (socket) => {
     openSockets.add(socket)
     socket.on('close', () => {
@@ -678,15 +689,20 @@ function createSeverCloseFn(server: http.Server | null) {
     })
   })
 
+  // 当服务器开始监听时，设置hasListened标记为true
   server.once('listening', () => {
     hasListened = true
   })
 
+  // 返回一个函数，用于关闭服务器和所有打开的连接
   return () =>
     new Promise<void>((resolve, reject) => {
+      // 销毁所有打开的socket连接
       openSockets.forEach((s) => s.destroy())
+      // 如果服务器已经开始监听，则也需要关闭服务器
       if (hasListened) {
         server.close((err) => {
+          // 根据服务器关闭结果，决定是解析Promise还是拒绝Promise
           if (err) {
             reject(err)
           } else {
@@ -694,6 +710,7 @@ function createSeverCloseFn(server: http.Server | null) {
           }
         })
       } else {
+        // 如果服务器从未开始监听，直接解析Promise
         resolve()
       }
     })
