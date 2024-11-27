@@ -178,6 +178,13 @@ export type ResolveFn = (
   aliasOnly?: boolean
 ) => Promise<string | undefined>
 
+/**
+ * 解析配置函数
+ * @param inlineConfig - 用户提供的内联配置
+ * @param command - 命令类型，可以是 'build' 或 'serve'
+ * @param defaultMode - 默认模式，默认为 'development'
+ * @returns 解析后的配置对象
+ */
 export async function resolveConfig(
   inlineConfig: InlineConfig,
   command: 'build' | 'serve',
@@ -187,20 +194,16 @@ export async function resolveConfig(
   let mode = inlineConfig.mode || defaultMode
   const logger = createLogger(config.logLevel, config.clearScreen)
 
-  // some dependencies e.g. @vue/compiler-* relies on NODE_ENV for getting
-  // production-specific behavior, so set it here even though we haven't
-  // resolve the final mode yet
+  // 如果模式为生产环境，设置 NODE_ENV 为 'production'
   if (mode === 'production') {
     process.env.NODE_ENV = 'production'
   }
 
+  // 加载配置文件
   let { configFile } = config
   if (configFile !== false) {
     const loadResult = await loadConfigFromFile(
-      {
-        mode,
-        command
-      },
+      { mode, command },
       configFile,
       config.root,
       config.logLevel
@@ -210,18 +213,21 @@ export async function resolveConfig(
       configFile = loadResult.path
     }
   }
-  // user config may provide an alternative mode
+  // 用户配置可能提供了替代模式
   mode = config.mode || mode
 
-  // resolve plugins
+  // 解析插件
   const rawUserPlugins = (config.plugins || []).flat().filter((p) => {
     return !p.apply || p.apply === command
   })
+  // 根据插件的执行顺序将用户提供的原始插件列表进行排序
+  // 插件列表被分为三类：预处理插件、普通插件和后处理插件
+  // 这样做是为了确保插件按照正确的顺序执行，从而避免潜在的执行顺序问题
   const [prePlugins, normalPlugins, postPlugins] = sortUserPlugins(
     rawUserPlugins
   )
 
-  // run config hooks
+  // 运行配置钩子
   const userPlugins = [...prePlugins, ...normalPlugins, ...postPlugins]
   userPlugins.forEach((p) => {
     if (p.config) {
@@ -232,40 +238,32 @@ export async function resolveConfig(
     }
   })
 
-  // resolve root
+  // 解析根目录
   const resolvedRoot = normalizePath(
     config.root ? path.resolve(config.root) : process.cwd()
   )
 
-  // resolve alias with internal client alias
+  // 解析别名并添加内部客户端别名
   const resolvedAlias = mergeAlias(
-    // #1732 the CLIENT_DIR may contain $$ which cannot be used as direct
-    // replacement string.
-    // @ts-ignore because @rollup/plugin-alias' type doesn't allow function
-    // replacement, but its implementation does work with function values.
     [{ find: /^\/@vite\//, replacement: () => CLIENT_DIR + '/' }],
     config.alias || []
   )
 
-  // load .env files
+  // 加载环境变量文件
   const userEnv = loadEnv(mode, resolvedRoot)
 
-  // Note it is possible for user to have a custom mode, e.g. `staging` where
-  // production-like behavior is expected. This is indicated by NODE_ENV=production
-  // loaded from `.staging.env` and set by us as VITE_USER_NODE_ENV
+  // 判断是否为生产环境
   const isProduction = (process.env.VITE_USER_NODE_ENV || mode) === 'production'
   if (isProduction) {
-    // in case default mode was not production and is overwritten
     process.env.NODE_ENV = 'production'
   }
 
-  // resolve public base url
-  // TODO remove when out of beta
+  // 解析公共基础 URL
   if (config.build?.base) {
     logger.warn(
       chalk.yellow.bold(
-        `(!) "build.base" config option is deprecated. ` +
-          `"base" is now a root-level config option.`
+        `(!) "build.base" 配置选项已弃用。` +
+          `"base" 现在是一个根级别的配置选项。`
       )
     )
     config.base = config.build.base
@@ -274,35 +272,17 @@ export async function resolveConfig(
   const BASE_URL = resolveBaseUrl(config.base, command === 'build', logger)
   const resolvedBuildOptions = resolveBuildOptions(config.build)
 
-  // TODO remove when out of beta
-  Object.defineProperty(resolvedBuildOptions, 'base', {
-    get() {
-      logger.warn(
-        chalk.yellow.bold(
-          `(!) "build.base" config option is deprecated. ` +
-            `"base" is now a root-level config option.\n` +
-            new Error().stack
-        )
-      )
-      return config.base
-    }
-  })
-
-  // resolve optimizer cache directory
-  const pkgPath = lookupFile(
-    resolvedRoot,
-    [`package.json`],
-    true /* pathOnly */
-  )
+  // 解析优化缓存目录
+  const pkgPath = lookupFile(resolvedRoot, [`package.json`], true)
   const optimizeCacheDir =
     pkgPath && path.join(path.dirname(pkgPath), `node_modules/${DEP_CACHE_DIR}`)
 
+  // 创建资产过滤器
   const assetsFilter = config.assetsInclude
     ? createFilter(config.assetsInclude)
     : () => false
 
-  // create an internal resolver to be used in special scenarios, e.g.
-  // optimizer & handling css @imports
+  // 创建内部解析器
   const createResolver: ResolvedConfig['createResolver'] = (options) => {
     let aliasContainer: PluginContainer | undefined
     let resolverContainer: PluginContainer | undefined
@@ -339,6 +319,7 @@ export async function resolveConfig(
     }
   }
 
+  // 构建最终解析的配置对象
   const resolved: ResolvedConfig = {
     ...config,
     configFile: configFile ? normalizePath(configFile) : undefined,
@@ -368,6 +349,7 @@ export async function resolveConfig(
     createResolver
   }
 
+  // 解析插件
   ;(resolved as any).plugins = await resolvePlugins(
     resolved,
     prePlugins,
@@ -375,15 +357,16 @@ export async function resolveConfig(
     postPlugins
   )
 
-  // call configResolved hooks
+  // 调用配置解析完成钩子
   userPlugins.forEach((p) => {
     if (p.configResolved) {
       p.configResolved(resolved)
     }
   })
 
+  // 打印调试信息
   if (process.env.DEBUG) {
-    debug(`using resolved config: %O`, {
+    debug(`使用解析后的配置: %O`, {
       ...resolved,
       plugins: resolved.plugins.map((p) => p.name)
     })
@@ -525,6 +508,24 @@ export function sortUserPlugins(
   return [prePlugins, normalPlugins, postPlugins]
 }
 
+/**
+ * 异步加载配置文件。
+ *
+ * 该函数尝试从指定或默认的配置文件中加载 Vite 配置。
+ * 它支持加载用 JavaScript（包括 ES 模块）、TypeScript 和 JSON 编写的配置文件。
+ * 如果提供了显式的配置路径，则尝试从该路径解析并加载配置。
+ * 如果未提供路径，则按以下顺序查找配置文件：
+ * 1. vite.config.js
+ * 2. vite.config.mjs（用于 ES 模块）
+ * 3. vite.config.ts（用于 TypeScript）
+ * 如果找到配置文件，则根据其类型进行加载和解析。
+ *
+ * @param configEnv 配置环境变量。
+ * @param configFile 可选的显式配置文件路径。
+ * @param configRoot 配置文件的根目录，默认为当前工作目录。
+ * @param logLevel 日志级别。
+ * @returns 返回一个包含配置文件路径和配置对象的对象，如果未找到配置文件则返回 null。
+ */
 export async function loadConfigFromFile(
   configEnv: ConfigEnv,
   configFile?: string,
@@ -537,7 +538,7 @@ export async function loadConfigFromFile(
   let isTS = false
   let isMjs = false
 
-  // check package.json for type: "module" and set `isMjs` to true
+  // 检查 package.json 中是否有 type: "module" 并设置 `isMjs` 为 true
   try {
     const pkg = lookupFile(configRoot, ['package.json'])
     if (pkg && JSON.parse(pkg).type === 'module') {
@@ -546,11 +547,10 @@ export async function loadConfigFromFile(
   } catch (e) {}
 
   if (configFile) {
-    // explicit config path is always resolved from cwd
+    // 显式配置路径始终从当前工作目录解析
     resolvedPath = path.resolve(configFile)
   } else {
-    // implicit config file loaded from inline root (if present)
-    // otherwise from cwd
+    // 隐式配置文件从内联根目录（如果存在）加载，否则从当前工作目录加载
     const jsconfigFile = path.resolve(configRoot, 'vite.config.js')
     if (fs.existsSync(jsconfigFile)) {
       resolvedPath = jsconfigFile
@@ -574,7 +574,7 @@ export async function loadConfigFromFile(
   }
 
   if (!resolvedPath) {
-    debug('no config file found.')
+    debug('未找到配置文件。')
     return null
   }
 
@@ -584,43 +584,40 @@ export async function loadConfigFromFile(
     if (isMjs) {
       const fileUrl = require('url').pathToFileURL(resolvedPath)
       if (isTS) {
-        // before we can register loaders without requiring users to run node
-        // with --experimental-loader themselves, we have to do a hack here:
-        // bundle the config file w/ ts transforms first, write it to disk,
-        // load it with native Node ESM, then delete the file.
+        // 在不需要用户运行带有 --experimental-loader 的 Node 之前，我们需要在这里进行一个变通：
+        // 先将配置文件与 TypeScript 转换一起打包，写入磁盘，使用原生 Node ESM 加载，然后删除文件。
         const code = await bundleConfigFile(resolvedPath, true)
         fs.writeFileSync(resolvedPath + '.js', code)
         userConfig = (await eval(`import(fileUrl + '.js?t=${Date.now()}')`))
           .default
         fs.unlinkSync(resolvedPath + '.js')
         debug(
-          `TS + native esm config loaded in ${Date.now() - start}ms`,
+          `TS + 原生 ESM 配置在 ${Date.now() - start}ms 内加载完成`,
           fileUrl
         )
       } else {
-        // using eval to avoid this from being compiled away by TS/Rollup
-        // append a query so that we force reload fresh config in case of
-        // server restart
+        // 使用 eval 以避免被 TS/Rollup 编译掉
+        // 追加查询参数以强制重新加载新鲜配置（服务器重启时）
         userConfig = (await eval(`import(fileUrl + '?t=${Date.now()}')`))
           .default
-        debug(`native esm config loaded in ${Date.now() - start}ms`, fileUrl)
+        debug(`原生 ESM 配置在 ${Date.now() - start}ms 内加载完成`, fileUrl)
       }
     }
 
     if (!userConfig && !isTS && !isMjs) {
-      // 1. try to directly require the module (assuming commonjs)
+      // 1. 尝试直接 require 模块（假设为 CommonJS）
       try {
-        // clear cache in case of server restart
+        // 清除缓存以防止服务器重启时的问题
         delete require.cache[require.resolve(resolvedPath)]
         userConfig = require(resolvedPath)
-        debug(`cjs config loaded in ${Date.now() - start}ms`)
+        debug(`CJS 配置在 ${Date.now() - start}ms 内加载完成`)
       } catch (e) {
         const ignored = new RegExp(
           [
             `Cannot use import statement`,
             `Unexpected token 'export'`,
             `Must use import to load ES Module`,
-            `Unexpected identifier` // #1635 Node <= 12.4 has no esm detection
+            `Unexpected identifier` // #1635 Node <= 12.4 没有 ESM 检测
           ].join('|')
         )
         if (!ignored.test(e.message)) {
@@ -630,28 +627,25 @@ export async function loadConfigFromFile(
     }
 
     if (!userConfig) {
-      // 2. if we reach here, the file is ts or using es import syntax, or
-      // the user has type: "module" in their package.json (#917)
-      // transpile es import syntax to require syntax using rollup.
-      // lazy require rollup (it's actually in dependencies)
+      // 2. 如果到达这里，文件是 TypeScript 或使用 ES 导入语法，或者用户在 package.json 中有 type: "module" (#917)
+      // 使用 Rollup 将 ES 导入语法转换为 require 语法。
+      // 懒加载 Rollup（实际上在依赖项中）
       const code = await bundleConfigFile(resolvedPath)
       userConfig = await loadConfigFromBundledFile(resolvedPath, code)
-      debug(`bundled config file loaded in ${Date.now() - start}ms`)
+      debug(`打包后的配置文件在 ${Date.now() - start}ms 内加载完成`)
     }
 
     const config =
       typeof userConfig === 'function' ? userConfig(configEnv) : userConfig
     if (!isObject(config)) {
-      throw new Error(`config must export or return an object.`)
+      throw new Error(`配置必须导出或返回一个对象。`)
     }
     return {
       path: normalizePath(resolvedPath),
       config
     }
   } catch (e) {
-    createLogger(logLevel).error(
-      chalk.red(`failed to load config from ${resolvedPath}`)
-    )
+    createLogger(logLevel).error(chalk.red(`从 ${resolvedPath} 加载配置失败`))
     throw e
   } finally {
     await stopService()
@@ -705,12 +699,22 @@ interface NodeModuleWithCompile extends NodeModule {
   _compile(code: string, filename: string): any
 }
 
+/**
+ * 异步从打包文件中加载用户配置。
+ * 此函数动态修改扩展加载器以将指定的打包代码作为模块加载，然后恢复原始加载器。
+ *
+ * @param fileName - 打包文件的名称，用于确定文件扩展名和定位文件。
+ * @param bundledCode - 要加载的打包代码字符串。
+ * @returns 解析后的用户配置对象。
+ */
 async function loadConfigFromBundledFile(
   fileName: string,
   bundledCode: string
 ): Promise<UserConfig> {
   const extension = path.extname(fileName)
   const defaultLoader = require.extensions[extension]!
+
+  // 修改当前文件扩展名的加载器，以便在加载指定文件时使用打包代码
   require.extensions[extension] = (module: NodeModule, filename: string) => {
     if (filename === fileName) {
       ;(module as NodeModuleWithCompile)._compile(bundledCode, filename)
@@ -718,11 +722,16 @@ async function loadConfigFromBundledFile(
       defaultLoader(module, filename)
     }
   }
-  // clear cache in case of server restart
+
+  // 清除缓存，以防服务器重启后加载旧的缓存
   delete require.cache[require.resolve(fileName)]
+
   const raw = require(fileName)
   const config = raw.__esModule ? raw.default : raw
+
+  // 恢复原始的加载器
   require.extensions[extension] = defaultLoader
+
   return config
 }
 
