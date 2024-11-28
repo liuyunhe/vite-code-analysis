@@ -137,11 +137,16 @@ export async function createPluginContainer(
   const watchFiles = new Set<string>()
 
   // get rollup version
+  // 解析 Rollup 包的路径，用于获取 Rollup 的版本信息
   const rollupPkgPath = resolve(require.resolve('rollup'), '../../package.json')
+
+  // 创建一个最小上下文对象，包含插件所需的元数据
   const minimalContext: MinimalPluginContext = {
     meta: {
+      // 从 Rollup 的 package.json 文件中读取并解析 Rollup 版本
       rollupVersion: JSON.parse(fs.readFileSync(rollupPkgPath, 'utf-8'))
         .version,
+      // 设置当前模式为监视模式
       watchMode: true
     }
   }
