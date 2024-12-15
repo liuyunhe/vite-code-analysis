@@ -28,15 +28,25 @@ const isDebug = !!process.env.DEBUG
 
 const knownIgnoreList = new Set(['/', '/favicon.ico'])
 
+/**
+ * 创建一个中间件函数，用于处理和转换传入请求。
+ * 主要目的是根据请求的URL和类型，决定是否进行资源的转换和传输。
+ *
+ * @param server Vite开发服务器实例，用于访问配置和模块图。
+ * @returns 返回一个中间件函数，用于处理HTTP请求。
+ */
 export function transformMiddleware(
   server: ViteDevServer
 ): Connect.NextHandleFunction {
+  // 从服务器实例中解构出配置和模块图。
   const {
     config: { root, logger },
     moduleGraph
   } = server
 
+  // 返回一个异步中间件函数。
   return async (req, res, next) => {
+    // 忽略非GET请求、HTML请求和已知的忽略项。
     if (
       req.method !== 'GET' ||
       req.headers.accept?.includes('text/html') ||
@@ -45,6 +55,7 @@ export function transformMiddleware(
       return next()
     }
 
+    // 如果有未完成的重载且请求不是Vite客户端请求，则等待重载完成。
     if (
       server._pendingReload &&
       // always allow vite client requests so that it can trigger page reload
@@ -56,6 +67,7 @@ export function transformMiddleware(
       return
     }
 
+    // 解码和清理请求URL。
     let url = decodeURI(removeTimestampQuery(req.url!)).replace(
       NULL_BYTE_PLACEHOLDER,
       '\0'
@@ -63,8 +75,9 @@ export function transformMiddleware(
     const withoutQuery = cleanUrl(url)
 
     try {
+      // 检查是否为源码映射请求。
       const isSourceMap = withoutQuery.endsWith('.map')
-      // since we generate source map references, handle those requests here
+      // 处理源码映射请求。
       if (isSourceMap) {
         const originalUrl = url.replace(/\.map($|\?)/, '$1')
         const map = (await moduleGraph.getModuleByUrl(originalUrl))
@@ -76,7 +89,7 @@ export function transformMiddleware(
         }
       }
 
-      // warn explicit /public/ paths
+      // 对/public/路径发出警告。
       if (url.startsWith('/public/')) {
         logger.warn(
           chalk.yellow(
@@ -88,28 +101,27 @@ export function transformMiddleware(
         )
       }
 
+      // 处理JS、导入、CSS和HTML代理请求。
       if (
         isJSRequest(url) ||
         isImportRequest(url) ||
         isCSSRequest(url) ||
         isHTMLProxy(url)
       ) {
-        // strip ?import
+        // 移除?import查询。
         url = removeImportQuery(url)
 
-        // Strip valid id prefix. This is preprended to resolved Ids that are
-        // not valid browser import specifiers by the importAnalysis plugin.
+        // 移除有效的ID前缀。
         if (url.startsWith(VALID_ID_PREFIX)) {
           url = url.slice(VALID_ID_PREFIX.length)
         }
 
-        // for CSS, we need to differentiate between normal CSS requests and
-        // imports
+        // 对于CSS请求，区分普通请求和导入请求。
         if (isCSSRequest(url) && req.headers.accept?.includes('text/css')) {
           url = injectQuery(url, 'direct')
         }
 
-        // check if we can return 304 early
+        // 检查是否可以早期返回304。
         const ifNoneMatch = req.headers['if-none-match']
         if (
           ifNoneMatch &&
@@ -121,7 +133,7 @@ export function transformMiddleware(
           return res.end()
         }
 
-        // resolve, load and transform using the plugin container
+        // 使用插件容器解析、加载和转换请求。
         const result = await transformRequest(url, server)
         if (result) {
           const type = isDirectCSSRequest(url) ? 'css' : 'js'
@@ -134,7 +146,7 @@ export function transformMiddleware(
             result.code,
             type,
             result.etag,
-            // allow browser to cache npm deps!
+            // 允许浏览器缓存npm依赖项！
             isDep ? 'max-age=31536000,immutable' : 'no-cache',
             result.map
           )
@@ -144,6 +156,7 @@ export function transformMiddleware(
       return next(e)
     }
 
+    // 如果请求未被处理，则调用next函数。
     next()
   }
 }
