@@ -45,10 +45,17 @@ function invalidateSSRModule(mod: ModuleNode, seen: Set<ModuleNode>) {
   mod.importers.forEach((importer) => invalidateSSRModule(importer, seen))
 }
 export class ModuleGraph {
+  // 存储URL与模块节点之间对应关系的Map
   urlToModuleMap = new Map<string, ModuleNode>()
+
+  // 存储ID与模块节点之间对应关系的Map
   idToModuleMap = new Map<string, ModuleNode>()
-  // a single file may corresponds to multiple modules with different queries
+
+  // 单个文件可能对应多个具有不同查询的模块
+  // 因此，使用Set存储这些模块，并通过Map建立文件与模块集合之间的对应关系
   fileToModulesMap = new Map<string, Set<ModuleNode>>()
+
+  // 存储插件实例的容器
   container: PluginContainer
 
   constructor(container: PluginContainer) {
@@ -68,19 +75,39 @@ export class ModuleGraph {
     return this.fileToModulesMap.get(file)
   }
 
+  /**
+   * 当文件发生变化时调用此函数，以处理相关的模块失效问题
+   * @param file 发生变化的文件路径
+   */
   onFileChange(file: string) {
+    // 根据文件路径获取相关的模块集合
     const mods = this.getModulesByFile(file)
+    // 如果存在相关的模块，则进一步处理
     if (mods) {
+      // 创建一个Set集合，用于记录已经处理过的模块，避免重复处理
       const seen = new Set<ModuleNode>()
+      // 遍历每个模块，使其失效，并记录已经处理过的模块
       mods.forEach((mod) => {
         this.invalidateModule(mod, seen)
       })
     }
   }
 
+  /**
+   * 使模块失效
+   *
+   * 通过清除模块的转换结果和SSR转换结果，以及调用使SSR模块失效的函数，来使给定的模块失效
+   * 这个过程确保模块在需要时可以被重新处理和转换
+   *
+   * @param mod 模块节点，表示需要使失效的模块
+   * @param seen 一个集合，用于跟踪已经处理过的模块，以避免重复处理，默认为一个新的集合
+   */
   invalidateModule(mod: ModuleNode, seen: Set<ModuleNode> = new Set()) {
+    // 清除模块的转换结果
     mod.transformResult = null
+    // 清除模块的SSR转换结果
     mod.ssrTransformResult = null
+    // 调用函数使SSR模块失效
     invalidateSSRModule(mod, seen)
   }
 
@@ -105,7 +132,7 @@ export class ModuleGraph {
    *
    * @param mod 当前模块节点，用于更新其导入和 HMR 关系。
    * @param importedModules 包含所有直接被当前模块导入的模块的集合。
-   * @param acceptedModules 包含所有当前模块接受更改的模块（HMR 依赖）的集合。
+   * @param acceptedModules 包含当前模块被引入的模块的集合。
    * @param isSelfAccepting 布尔值，表示模块是否接受自身的更改。
    * @returns 返回一个不再被当前模块导入的模块节点集合，如果有；否则返回 undefined。
    */
