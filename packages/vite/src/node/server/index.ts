@@ -505,18 +505,28 @@ export async function createServer(
   middlewares.use(errorMiddleware(server, middlewareMode))
 
   // 运行优化器
+  /**
+   * 执行优化操作
+   * 此函数根据配置决定是否进行依赖优化如果配置中指定了优化缓存目录，则会运行优化器
+   * 进行优化处理在优化过程中，会将优化器的运行状态标记为true，并在完成后重置为false
+   * 此外，如果进行了优化处理，则会更新缺失导入的注册函数
+   */
   const runOptimize = async () => {
+    // 检查是否配置了优化缓存目录，以决定是否执行优化操作
     if (config.optimizeCacheDir) {
+      // 标记优化器开始运行
       server._isRunningOptimizer = true
       try {
+        // 执行依赖优化，并保存优化后的依赖元数据
         server._optimizeDepsMetadata = await optimizeDeps(config)
       } finally {
+        // 无论优化结果如何，都将标记优化器停止运行
         server._isRunningOptimizer = false
       }
+      // 在优化完成后，创建并注册用于处理缺失导入的函数
       server._registerMissingImport = createMissingImpoterRegisterFn(server)
     }
   }
-
   if (!middlewareMode && httpServer) {
     // 在服务器启动前运行优化器
     const listen = httpServer.listen.bind(httpServer)
@@ -666,7 +676,7 @@ async function startServer(
 /**
  * 创建一个用于关闭服务器的函数
  * 此函数主要处理服务器的优雅关闭过程，确保所有已打开的连接都被正确关闭后，才关闭服务器
- * 
+ *
  * @param server 可能为null的http.Server实例，用于处理连接和关闭操作
  * @returns 返回一个函数，该函数当被调用时，会关闭服务器并结束所有打开的连接
  */
